@@ -1,0 +1,311 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>IRB Copilot MVP</title>
+    <link rel="stylesheet" href="/styles.css">
+  </head>
+  <body>
+    <div class="ambient ambient--a" aria-hidden="true"></div>
+    <div class="ambient ambient--b" aria-hidden="true"></div>
+    <div class="ambient ambient--c" aria-hidden="true"></div>
+
+    <header class="hero">
+      <div class="hero__inner">
+        <div class="hero__top">
+          <div class="hero__copy">
+            <p class="eyebrow">IRB Assistance Tool</p>
+            <h1>AI IRB Copilot</h1>
+            <p class="subtitle">
+              Rule-based pre-screening + AI-assisted drafting for IRB preparation.
+              Built to streamline preparation, not replace IRB review.
+            </p>
+            <div class="hero__chips" aria-label="Capabilities">
+              <span class="chip">Rule Flags</span>
+              <span class="chip">AI Drafting</span>
+              <span class="chip">Human Review Gate</span>
+            </div>
+          </div>
+
+          <div class="hero__meta" aria-live="polite">
+            <p class="hero__meta-label">Workflow Progress</p>
+            <div class="progress-track" aria-hidden="true">
+              <div id="progressFill" class="progress-fill"></div>
+            </div>
+            <p id="progressLabel" class="hero__meta-value">Step 1 of 5 · Project Intake</p>
+            <p class="hero__meta-note">Draft support only. PI/faculty advisor + IRB review required.</p>
+          </div>
+        </div>
+
+        <div id="healthBanner" class="health-banner" aria-live="polite">Checking AI mode...</div>
+      </div>
+    </header>
+
+    <main class="app-shell">
+      <aside class="stepper" aria-label="Workflow steps">
+        <div class="stepper__head">
+          <p class="stepper__eyebrow">Workflow</p>
+          <p class="stepper__title">Prepare an IRB-ready draft packet</p>
+        </div>
+        <div class="stepper__list">
+          <button class="step active" data-step="1" data-step-title="Project Intake">
+            <span class="step__num">01</span>
+            <span class="step__copy">Project Intake</span>
+          </button>
+          <button class="step" data-step="2" data-step-title="Recruitment & Participants">
+            <span class="step__num">02</span>
+            <span class="step__copy">Recruitment & Participants</span>
+          </button>
+          <button class="step" data-step="3" data-step-title="Data & Privacy">
+            <span class="step__num">03</span>
+            <span class="step__copy">Data & Privacy</span>
+          </button>
+          <button class="step" data-step="4" data-step-title="IRB Risk Flags">
+            <span class="step__num">04</span>
+            <span class="step__copy">IRB Risk Flags</span>
+          </button>
+          <button class="step" data-step="5" data-step-title="Drafting Studio">
+            <span class="step__num">05</span>
+            <span class="step__copy">Drafting Studio</span>
+          </button>
+        </div>
+      </aside>
+
+      <section class="panel">
+        <form id="intakeForm">
+          <section class="screen active" data-screen="1" aria-labelledby="step1Title">
+            <h2 id="step1Title">Project Intake</h2>
+            <p class="screen-lead">Define the study context in plain language. This drives the rule-based flags and drafting prompts.</p>
+            <div class="grid">
+              <label>
+                Study Title
+                <input name="studyTitle" type="text" placeholder="AI-assisted grading perception study">
+              </label>
+              <label>
+                Institution
+                <input name="institution" type="text" placeholder="Your university">
+              </label>
+              <label class="span-2">
+                Course / Program Context
+                <input name="courseName" type="text" placeholder="CS 101 (Spring 2026)">
+              </label>
+              <label class="span-2">
+                Project Purpose (plain language)
+                <textarea name="projectPurpose" rows="4" placeholder="Describe what you want to study and why."></textarea>
+              </label>
+            </div>
+
+            <fieldset>
+              <legend>What data collection methods are planned?</legend>
+              <div class="checkbox-grid">
+                <label><input type="checkbox" name="dataCollectionMethods" value="survey"> Survey</label>
+                <label><input type="checkbox" name="dataCollectionMethods" value="interview"> Interview</label>
+                <label><input type="checkbox" name="dataCollectionMethods" value="focus_group"> Focus group</label>
+                <label><input type="checkbox" name="dataCollectionMethods" value="lms_data"> LMS / course platform data</label>
+                <label><input type="checkbox" name="dataCollectionMethods" value="assignment_scores"> Assignment / rubric scores</label>
+                <label><input type="checkbox" name="dataCollectionMethods" value="usage_logs"> Tool usage logs</label>
+              </div>
+            </fieldset>
+
+            <div class="nav-row">
+              <button type="button" class="secondary" data-nav="next">Next</button>
+            </div>
+          </section>
+
+          <section class="screen" data-screen="2" aria-labelledby="step2Title">
+            <h2 id="step2Title">Recruitment & Participants</h2>
+            <p class="screen-lead">Capture recruitment roles and incentives so the tool can flag coercion and power-imbalance risks early.</p>
+            <fieldset>
+              <legend>Participant groups</legend>
+              <div class="checkbox-grid">
+                <label><input type="checkbox" name="participantGroups" value="students"> Students</label>
+                <label><input type="checkbox" name="participantGroups" value="tas"> TAs</label>
+                <label><input type="checkbox" name="participantGroups" value="instructors"> Instructors</label>
+              </div>
+            </fieldset>
+
+            <div class="grid">
+              <label>
+                Who will recruit participants?
+                <select name="recruiterRole">
+                  <option value="undecided">Undecided</option>
+                  <option value="instructor">Course instructor</option>
+                  <option value="ta">Course TA</option>
+                  <option value="researcher_not_in_course">Researcher not in course grading role</option>
+                  <option value="advisor">Faculty advisor / neutral staff</option>
+                </select>
+              </label>
+              <label>
+                Are minors involved?
+                <select name="includesMinors">
+                  <option value="unknown">Unknown</option>
+                  <option value="no">No</option>
+                  <option value="yes">Yes</option>
+                </select>
+              </label>
+            </div>
+
+            <div class="checkbox-stack">
+              <label><input type="checkbox" name="participationVoluntary" checked> Participation is explicitly voluntary</label>
+              <label><input type="checkbox" name="offersExtraCredit"> Participation may involve extra credit / course credit</label>
+              <label><input type="checkbox" name="alternativeActivityProvided"> Equivalent non-research alternative activity exists</label>
+              <label><input type="checkbox" name="aiAffectsOfficialGrades"> AI-generated outputs affect official course grades during the study</label>
+              <label><input type="checkbox" name="researchSeparateFromGrades"> Research participation data access is separated from grading decisions</label>
+            </div>
+
+            <div class="nav-row">
+              <button type="button" class="secondary" data-nav="prev">Back</button>
+              <button type="button" class="secondary" data-nav="next">Next</button>
+            </div>
+          </section>
+
+          <section class="screen" data-screen="3" aria-labelledby="step3Title">
+            <h2 id="step3Title">Data & Privacy</h2>
+            <p class="screen-lead">Describe identifiers, education records, storage, and retention. These details strongly affect IRB concerns and draft quality.</p>
+
+            <div class="checkbox-stack">
+              <label><input type="checkbox" name="collectsIdentifiers"> Study collects direct identifiers</label>
+              <label><input type="checkbox" name="collectsEducationRecords"> Study uses education records / course performance data</label>
+              <label><input type="checkbox" name="collectsSensitive"> Study collects sensitive personal information</label>
+              <label><input type="checkbox" name="deidentifyBeforeAnalysis"> Data will be de-identified before analysis</label>
+            </div>
+
+            <fieldset>
+              <legend>If collecting identifiers, which types?</legend>
+              <div class="checkbox-grid">
+                <label><input type="checkbox" name="identifierTypes" value="name"> Name</label>
+                <label><input type="checkbox" name="identifierTypes" value="email"> Email</label>
+                <label><input type="checkbox" name="identifierTypes" value="student_id"> Student ID</label>
+                <label><input type="checkbox" name="identifierTypes" value="device_id"> Device / platform ID</label>
+              </div>
+            </fieldset>
+
+            <div class="grid">
+              <label class="span-2">
+                Data storage location
+                <input name="storageLocation" type="text" placeholder="University encrypted drive / approved cloud storage">
+              </label>
+              <label class="span-2">
+                Who has access (by role)
+                <input name="accessRoles" type="text" placeholder="PI, advisor, TA analyst (de-identified only)">
+              </label>
+              <label>
+                Retention / deletion timeline
+                <input name="retentionPeriod" type="text" placeholder="Retain 3 years after study closure, then delete">
+              </label>
+              <label>
+                Third-party tools/services used
+                <input name="thirdPartyTools" type="text" placeholder="Qualtrics, LMS export, cloud storage (if any)">
+              </label>
+            </div>
+
+            <div class="nav-row">
+              <button type="button" class="secondary" data-nav="prev">Back</button>
+              <button type="button" class="secondary" data-nav="next">Next</button>
+            </div>
+          </section>
+
+          <section class="screen" data-screen="4" aria-labelledby="step4Title">
+            <div class="screen-head">
+              <div>
+                <h2 id="step4Title">IRB Risk Flags (Rule-Based)</h2>
+                <p class="screen-lead">Run a deterministic pre-screen to surface common concerns before drafting final language.</p>
+              </div>
+              <button id="evaluateBtn" type="button">Run Pre-Screen</button>
+            </div>
+
+            <div id="summaryCard" class="card muted">
+              <p>Run the pre-screen to view likely risk flags and drafting guidance.</p>
+            </div>
+
+            <div id="flagList" class="flag-list" aria-live="polite"></div>
+
+            <div class="nav-row">
+              <button type="button" class="secondary" data-nav="prev">Back</button>
+              <button type="button" class="secondary" data-nav="next">Next</button>
+            </div>
+          </section>
+
+          <section class="screen" data-screen="5" aria-labelledby="step5Title">
+            <div class="screen-head">
+              <div>
+                <h2 id="step5Title">Drafting Studio</h2>
+                <p class="screen-lead">Generate and revise draft language. Every output remains a human-reviewed draft until your advisor/IRB approves it.</p>
+              </div>
+              <button id="generateAllBtn" type="button">Generate All Drafts</button>
+            </div>
+
+            <p class="helper">
+              Generate draft language for consent, recruitment, and data handling. Use rewrite actions to reduce coercive tone or improve clarity.
+            </p>
+
+            <div class="draft-card" data-doc="consent">
+              <div class="draft-card__head">
+                <h3>Consent Form Draft</h3>
+                <div class="actions">
+                  <button type="button" data-action="generate" data-doc="consent">Generate</button>
+                  <button type="button" class="secondary" data-action="rewrite" data-goal="less_coercive" data-doc="consent">Less Coercive</button>
+                  <button type="button" class="secondary" data-action="rewrite" data-goal="clearer" data-doc="consent">Clearer</button>
+                </div>
+              </div>
+              <p class="status" data-status-for="consent">No draft yet.</p>
+              <textarea data-textarea-for="consent" rows="16" placeholder="Consent draft will appear here..."></textarea>
+            </div>
+
+            <div class="draft-card" data-doc="recruitment">
+              <div class="draft-card__head">
+                <h3>Recruitment Message Draft</h3>
+                <div class="actions">
+                  <button type="button" data-action="generate" data-doc="recruitment">Generate</button>
+                  <button type="button" class="secondary" data-action="rewrite" data-goal="less_coercive" data-doc="recruitment">Less Coercive</button>
+                  <button type="button" class="secondary" data-action="rewrite" data-goal="clearer" data-doc="recruitment">Clearer</button>
+                </div>
+              </div>
+              <p class="status" data-status-for="recruitment">No draft yet.</p>
+              <textarea data-textarea-for="recruitment" rows="12" placeholder="Recruitment message draft will appear here..."></textarea>
+            </div>
+
+            <div class="draft-card" data-doc="data_handling">
+              <div class="draft-card__head">
+                <h3>Data Handling Summary Draft</h3>
+                <div class="actions">
+                  <button type="button" data-action="generate" data-doc="data_handling">Generate</button>
+                  <button type="button" class="secondary" data-action="rewrite" data-goal="less_coercive" data-doc="data_handling">Less Coercive</button>
+                  <button type="button" class="secondary" data-action="rewrite" data-goal="clearer" data-doc="data_handling">Clearer</button>
+                </div>
+              </div>
+              <p class="status" data-status-for="data_handling">No draft yet.</p>
+              <textarea data-textarea-for="data_handling" rows="14" placeholder="Data handling summary draft will appear here..."></textarea>
+            </div>
+
+            <div class="review-box">
+              <label>
+                <input id="humanReviewCheckbox" type="checkbox">
+                I understand these are drafts only and require PI/faculty advisor + IRB review before submission or use.
+              </label>
+              <button id="exportBtn" type="button" class="secondary">Download Draft Bundle (.txt)</button>
+            </div>
+
+            <div class="nav-row">
+              <button type="button" class="secondary" data-nav="prev">Back</button>
+            </div>
+          </section>
+        </form>
+      </section>
+    </main>
+
+    <template id="flagTemplate">
+      <article class="flag-card">
+        <div class="flag-card__top">
+          <span class="severity-pill"></span>
+          <h3 class="flag-title"></h3>
+        </div>
+        <p class="flag-rationale"></p>
+        <ul class="flag-actions"></ul>
+      </article>
+    </template>
+
+    <script src="/app.js" defer></script>
+  </body>
+</html>
