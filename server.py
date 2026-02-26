@@ -23,6 +23,16 @@ from typing import Any
 from urllib import error as urlerror
 from urllib import request as urlrequest
 
+from irb_profile_importer import import_irb_profile
+from irb_profiles import (
+    DEFAULT_IRB_PROFILE_ID,
+    get_irb_profile,
+    list_irb_profiles,
+    make_imported_profile_id,
+    profile_exists,
+    upsert_irb_profile,
+)
+
 
 ROOT = Path(__file__).resolve().parent
 STATIC_DIR = ROOT / "static"
@@ -72,6 +82,9 @@ def _list(value: Any) -> list[str]:
 
 def _title_case_words(words: list[str]) -> str:
     return ", ".join(w.replace("_", " ").title() for w in words if w)
+
+
+PLACEHOLDER_PATTERN = re.compile(r"\[[^\[\]\n]{2,100}\]")
 
 
 @dataclass
@@ -323,6 +336,285 @@ def evaluate_irb_risks(intake: dict[str, Any]) -> dict[str, Any]:
     return {
         "summary": summary,
         "flags": [f.as_dict() for f in sorted(flags, key=lambda f: severity_rank[f.severity], reverse=True)],
+    }
+
+
+def _conditional_matches(conditional: dict[str, Any] | None, intake: dict[str, Any]) -> bool:
+    if not conditional:
+        return True
+
+    field_truthy = _str(conditional.get("fieldTruthy"))
+    if field_truthy and not _bool(intake.get(field_truthy)):
+        return False
+
+    field_falsy = _str(conditional.get("fieldFalsy"))
+    if field_falsy and _bool(intake.get(field_falsy)):
+        return False
+
+    methods_needed = set(_list(conditional.get("methodIn")))
+    if methods_needed:
+        methods = set(_list(intake.get("dataCollectionMethods")))
+        if not methods.intersection(methods_needed):
+            return False
+
+    participants_needed = set(_list(conditional.get("participantIn")))
+    if participants_needed:
+        participants = set(_list(intake.get("participantGroups")))
+        if not participants.intersection(participants_needed):
+            return False
+
+    field_equals = conditional.get("fieldEquals")
+    if isinstance(field_equals, dict):
+        for key, expected in field_equals.items():
+            if intake.get(key) != expected:
+                return False
+
+    return True
+
+
+def _value_missing_for_spec(spec: dict[str, Any], intake: dict[str, Any]) -> str | None:
+    key = _str(spec.get("key"))
+    field_type = _str(spec.get("type")) or "text"
+    value = intake.get(key)
+    label = _str(spec.get("label")) or key
+
+    if field_type == "multi_select":
+        if not _list(value):
+            return f"{label} is required."
+    elif field_type in {"text", "select"}:
+        if not _str(value):
+            return f"{label} is required."
+    elif field_type == "bool_true":
+        if not _bool(value):
+            return f"{label} must be confirmed."
+
+    disallow_values = {_str(v) for v in _list(spec.get("disallowValues"))}
+    normalized = _str(value).lower()
+    if normalized and normalized in {v.lower() for v in disallow_values}:
+        return f"{label} cannot be left as '{_str(value)}'."
+    if not normalized and "" in disallow_values:
+        return f"{label} is required."
+
+    return None
+
+
+def _placeholder_findings_for_text(doc_type: str, label: str, text: str) -> list[dict[str, Any]]:
+    matches = PLACEHOLDER_PATTERN.findall(text or "")
+    counts: dict[str, int] = {}
+    for match in matches:
+        counts[match] = counts.get(match, 0) + 1
+    return [
+        {
+            "docType": doc_type,
+            "label": label,
+            "placeholder": placeholder,
+            "count": count,
+        }
+        for placeholder, count in sorted(counts.items(), key=lambda item: item[0].lower())
+    ]
+
+
+def _section_status_from_source(
+    mapping: dict[str, Any],
+    intake: dict[str, Any],
+    evaluation: dict[str, Any],
+    drafts: dict[str, str],
+    missing_manual_attachments: list[dict[str, Any]],
+) -> tuple[str, str]:
+    source_type = _str(mapping.get("sourceType"))
+    source_key = _str(mapping.get("sourceKey"))
+
+    if source_type == "intake":
+        value = intake.get(source_key)
+        ok = bool(_list(value)) if isinstance(value, list) else bool(_str(value))
+        return ("complete", "Ready") if ok else ("missing", "Missing intake data")
+
+    if source_type == "generated_doc":
+        text = _str(drafts.get(source_key))
+        if not text:
+            return ("missing", "Draft not generated")
+        if PLACEHOLDER_PATTERN.search(text):
+            return ("needs_edit", "Draft has placeholders")
+        return ("complete", "Ready")
+
+    if source_type == "derived":
+        if source_key == "participants_and_recruiter":
+            participants_ok = bool(_list(intake.get("participantGroups")))
+            recruiter_ok = _str(intake.get("recruiterRole")).lower() not in {"", "undecided"}
+            return ("complete", "Ready") if participants_ok and recruiter_ok else ("missing", "Missing participant/recruiter detail")
+        if source_key == "evaluation_flags":
+            return ("review_needed", "Review risk flags") if evaluation else ("missing", "Run pre-screen")
+        return ("review_needed", "Derived section requires review")
+
+    if source_type == "manual_attachment_bundle":
+        if missing_manual_attachments:
+            return ("manual_required", "Manual attachments needed")
+        return ("complete", "Ready")
+
+    return ("review_needed", "Review")
+
+
+def _profile_summary_for_client(profile: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "id": profile.get("id", DEFAULT_IRB_PROFILE_ID),
+        "name": profile.get("name", "IRB Profile"),
+        "shortName": profile.get("shortName", profile.get("name", "IRB Profile")),
+        "description": profile.get("description", ""),
+        "irbOfficeLabel": profile.get("irbOfficeLabel", "IRB"),
+        "version": profile.get("version", "1.0"),
+    }
+
+
+def evaluate_profile_readiness(
+    intake: dict[str, Any],
+    evaluation: dict[str, Any] | None = None,
+    drafts: dict[str, Any] | None = None,
+    profile_id: str | None = None,
+) -> dict[str, Any]:
+    profile = get_irb_profile(_str(profile_id) or _str(intake.get("irbProfileId")))
+    evaluation = evaluation if isinstance(evaluation, dict) else evaluate_irb_risks(intake)
+    drafts_in = drafts if isinstance(drafts, dict) else {}
+    drafts_text = {key: _str(value) for key, value in drafts_in.items()}
+
+    missing_fields: list[dict[str, Any]] = []
+    for spec in profile.get("requiredIntakeFields", []):
+        if not _conditional_matches(spec.get("conditional"), intake):
+            continue
+        problem = _value_missing_for_spec(spec, intake)
+        if problem:
+            missing_fields.append(
+                {
+                    "key": _str(spec.get("key")),
+                    "label": _str(spec.get("label")) or _str(spec.get("key")),
+                    "reason": problem,
+                }
+            )
+
+    missing_drafts: list[dict[str, Any]] = []
+    placeholder_findings: list[dict[str, Any]] = []
+    for spec in profile.get("requiredGeneratedDrafts", []):
+        doc_type = _str(spec.get("docType"))
+        label = _str(spec.get("label")) or doc_type.replace("_", " ").title()
+        text = _str(drafts_text.get(doc_type))
+        if not text:
+            missing_drafts.append(
+                {"docType": doc_type, "label": label, "reason": f"{label} has not been generated yet."}
+            )
+            continue
+        placeholder_findings.extend(_placeholder_findings_for_text(doc_type, label, text))
+
+    missing_manual_attachments: list[dict[str, Any]] = []
+    for spec in profile.get("requiredManualAttachments", []):
+        if not _conditional_matches(spec.get("conditional"), intake):
+            continue
+        missing_manual_attachments.append(
+            {
+                "id": _str(spec.get("id")),
+                "label": _str(spec.get("label")) or _str(spec.get("id")),
+                "reason": _str(spec.get("reason")) or "Manual attachment required by profile.",
+            }
+        )
+
+    recommended_manual_attachments: list[dict[str, Any]] = []
+    for spec in profile.get("recommendedManualAttachments", []):
+        if not _conditional_matches(spec.get("conditional"), intake):
+            continue
+        recommended_manual_attachments.append(
+            {
+                "id": _str(spec.get("id")),
+                "label": _str(spec.get("label")) or _str(spec.get("id")),
+                "reason": _str(spec.get("reason")) or "Recommended attachment.",
+            }
+        )
+
+    flags = evaluation.get("flags", []) if isinstance(evaluation, dict) else []
+    high_flags = [f for f in flags if _str(f.get("severity")).lower() == "high"]
+    medium_flags = [f for f in flags if _str(f.get("severity")).lower() == "medium"]
+
+    blocking_items = [
+        f"High-severity IRB flag: {_str(flag.get('title'))}"
+        for flag in high_flags
+    ]
+    warning_items = [
+        f"Medium-severity IRB flag: {_str(flag.get('title'))}"
+        for flag in medium_flags
+    ]
+    if recommended_manual_attachments:
+        warning_items.append(
+            "Advisor review materials are recommended before submission."
+        )
+
+    section_checklist: list[dict[str, Any]] = []
+    for mapping in profile.get("sectionMappings", []):
+        status, status_label = _section_status_from_source(
+            mapping,
+            intake,
+            evaluation,
+            drafts_text,
+            missing_manual_attachments,
+        )
+        section_checklist.append(
+            {
+                "sectionId": _str(mapping.get("sectionId")),
+                "sectionLabel": _str(mapping.get("sectionLabel")),
+                "required": _bool(mapping.get("required")),
+                "sourceType": _str(mapping.get("sourceType")),
+                "sourceKey": _str(mapping.get("sourceKey")),
+                "status": status,
+                "statusLabel": status_label,
+                "notes": _str(mapping.get("notes")),
+            }
+        )
+
+    ready_for_advisor_review = not missing_fields and not missing_drafts
+    ready_for_irb_draft_packet = (
+        ready_for_advisor_review
+        and not blocking_items
+        and not placeholder_findings
+        and not missing_manual_attachments
+    )
+
+    summary = {
+        "readyForAdvisorReview": ready_for_advisor_review,
+        "readyForIrbDraftPacket": ready_for_irb_draft_packet,
+        "missingFieldCount": len(missing_fields),
+        "missingDraftCount": len(missing_drafts),
+        "missingManualAttachmentCount": len(missing_manual_attachments),
+        "placeholderIssueCount": len(placeholder_findings),
+        "blockingCount": len(blocking_items),
+        "warningCount": len(warning_items),
+    }
+
+    next_steps: list[str] = []
+    if missing_fields:
+        next_steps.append("Complete required project intake fields for the selected IRB profile.")
+    if missing_drafts:
+        next_steps.append("Generate all required drafts (consent, recruitment, data handling).")
+    if placeholder_findings:
+        next_steps.append("Replace bracketed placeholders in generated drafts before sharing with advisor/IRB.")
+    if blocking_items:
+        next_steps.append("Resolve high-severity IRB flags or document mitigations in the protocol.")
+    if missing_manual_attachments:
+        next_steps.append("Prepare manual attachments (survey instrument, interview guide, coding/linkage plan as applicable).")
+    if not next_steps:
+        next_steps.append("Review final packet with faculty advisor and align wording with your institution's IRB templates.")
+
+    return {
+        "profile": _profile_summary_for_client(profile),
+        "summary": summary,
+        "missingFields": missing_fields,
+        "missingDrafts": missing_drafts,
+        "missingManualAttachments": missing_manual_attachments,
+        "recommendedManualAttachments": recommended_manual_attachments,
+        "placeholderFindings": placeholder_findings,
+        "blockingItems": blocking_items,
+        "warningItems": warning_items,
+        "sectionChecklist": section_checklist,
+        "nextSteps": next_steps,
+        "notes": [
+            "Profile-based readiness is a submission preparation aid, not an institutional determination.",
+            "Institution-specific forms may require additional sections or attachments.",
+        ],
     }
 
 
@@ -789,6 +1081,18 @@ class IRBCopilotHandler(SimpleHTTPRequestHandler):
                 }
             )
             return
+        if self.path == "/api/profiles":
+            active_id = _str(self.headers.get("X-IRB-Profile-Id")) or DEFAULT_IRB_PROFILE_ID
+            active = get_irb_profile(active_id)
+            self._send_json(
+                {
+                    "ok": True,
+                    "defaultProfileId": DEFAULT_IRB_PROFILE_ID,
+                    "profiles": list_irb_profiles(),
+                    "activeProfile": _profile_summary_for_client(active),
+                }
+            )
+            return
         if self.path in {"/", "/index.html"}:
             self.path = "/index.html"
         return super().do_GET()
@@ -808,7 +1112,74 @@ class IRBCopilotHandler(SimpleHTTPRequestHandler):
                 if not isinstance(intake, dict):
                     raise ValueError("'intake' must be an object")
                 result = evaluate_irb_risks(intake)
-                self._send_json({"ok": True, "evaluation": result})
+                profile = get_irb_profile(_str(intake.get("irbProfileId")))
+                self._send_json(
+                    {
+                        "ok": True,
+                        "evaluation": result,
+                        "profile": _profile_summary_for_client(profile),
+                    }
+                )
+                return
+
+            if self.path == "/api/readiness":
+                intake = payload.get("intake", {})
+                evaluation = payload.get("evaluation", {})
+                drafts = payload.get("drafts", {})
+                profile_id = _str(payload.get("profileId"))
+                if not isinstance(intake, dict):
+                    raise ValueError("'intake' must be an object")
+                if evaluation and not isinstance(evaluation, dict):
+                    raise ValueError("'evaluation' must be an object when provided")
+                if drafts and not isinstance(drafts, dict):
+                    raise ValueError("'drafts' must be an object when provided")
+                readiness = evaluate_profile_readiness(
+                    intake=intake,
+                    evaluation=evaluation if isinstance(evaluation, dict) else None,
+                    drafts=drafts if isinstance(drafts, dict) else None,
+                    profile_id=profile_id or _str(intake.get("irbProfileId")),
+                )
+                self._send_json({"ok": True, "readiness": readiness})
+                return
+
+            if self.path == "/api/import-profile":
+                organization_name = _str(payload.get("organizationName"))
+                organization_website = _str(payload.get("organizationWebsite"))
+                irb_page_url = _str(payload.get("irbPageUrl"))
+                raw_policy_text = _str(payload.get("rawPolicyText"))
+                base_profile_id = _str(payload.get("baseProfileId")) or DEFAULT_IRB_PROFILE_ID
+                requested_profile_id = _str(payload.get("profileId"))
+
+                if not organization_name:
+                    raise ValueError("'organizationName' is required")
+
+                if requested_profile_id and profile_exists(requested_profile_id):
+                    profile_id = requested_profile_id
+                elif requested_profile_id:
+                    profile_id = requested_profile_id
+                else:
+                    profile_id = make_imported_profile_id(organization_name)
+
+                base_profile = get_irb_profile(base_profile_id)
+                import_result = import_irb_profile(
+                    org_name=organization_name,
+                    organization_website=organization_website,
+                    irb_page_url=irb_page_url,
+                    raw_policy_text=raw_policy_text,
+                    profile_id=profile_id,
+                    base_profile=base_profile,
+                )
+                saved_profile = upsert_irb_profile(import_result["profileDraft"])
+                import_result["profileDraft"] = saved_profile
+
+                self._send_json(
+                    {
+                        "ok": True,
+                        "importResult": import_result,
+                        "profiles": list_irb_profiles(),
+                        "activeProfile": _profile_summary_for_client(saved_profile),
+                    }
+                )
                 return
 
             if self.path == "/api/draft":

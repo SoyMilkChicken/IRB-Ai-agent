@@ -29,6 +29,7 @@ Recommended real screenshots to replace with:
 
 1. `Project Intake`
 - Collects study title, institution, course context, methods, and plain-language purpose
+- Supports profile import from school/organization name, optional website/IRB URL, or pasted policy text
 
 2. `Recruitment & Participants`
 - Captures participant groups, recruiter role, voluntariness, extra credit, minors, grade impact
@@ -48,6 +49,12 @@ Recommended real screenshots to replace with:
   - `Less Coercive`
   - `Clearer`
 - Exports a draft bundle (`.txt`) after a human-review acknowledgment
+
+6. `IRB Profile Importer`
+- Generates a draft institution profile from school/organization details
+- Extracts requirement signals (training, consent templates, recruitment materials, data security, FERPA, etc.)
+- Returns confidence, warnings, source links, and detected form/template links
+- Lets users apply the imported profile directly in the UI for readiness checks
 
 ## Stack (Current MVP)
 
@@ -91,6 +98,12 @@ Use this flow during a live demo:
 6. Use `Less Coercive` on the recruitment draft and show how wording is revised.
 7. Check the human-review acknowledgment box and export the draft bundle.
 8. Emphasize that the tool prepares materials but does not approve IRB submissions.
+
+Optional importer demo add-on:
+
+9. In Step 1, run the profile importer with school name + IRB URL (or pasted policy text).
+10. Show confidence/warnings and apply the imported profile.
+11. Re-run readiness check to show institution-specific attachment expectations.
 
 ## Repository Structure
 

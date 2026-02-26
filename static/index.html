@@ -79,6 +79,12 @@
             <p class="screen-lead">Define the study context in plain language. This drives the rule-based flags and drafting prompts.</p>
             <div class="grid">
               <label>
+                IRB Profile
+                <select id="irbProfileSelect" name="irbProfileId">
+                  <option value="">Loading profiles...</option>
+                </select>
+              </label>
+              <label>
                 Study Title
                 <input name="studyTitle" type="text" placeholder="AI-assisted grading perception study">
               </label>
@@ -86,7 +92,7 @@
                 Institution
                 <input name="institution" type="text" placeholder="Your university">
               </label>
-              <label class="span-2">
+              <label>
                 Course / Program Context
                 <input name="courseName" type="text" placeholder="CS 101 (Spring 2026)">
               </label>
@@ -95,6 +101,43 @@
                 <textarea name="projectPurpose" rows="4" placeholder="Describe what you want to study and why."></textarea>
               </label>
             </div>
+
+            <div id="profileMetaCard" class="card muted profile-meta-card" aria-live="polite">
+              <p>Loading IRB profile details...</p>
+            </div>
+
+            <fieldset class="importer-fieldset">
+              <legend>Import IRB Profile From School/Organization</legend>
+              <p class="screen-lead importer-lead">
+                Best-effort import only. Results are draft guidance and must be verified against official IRB instructions.
+              </p>
+              <div class="grid">
+                <label>
+                  Organization Name
+                  <input id="importOrgNameInput" type="text" placeholder="Example University">
+                </label>
+                <label>
+                  Organization Website (optional)
+                  <input id="importOrgWebsiteInput" type="text" placeholder="https://www.example.edu">
+                </label>
+                <label class="span-2">
+                  IRB Page URL (optional)
+                  <input id="importIrbUrlInput" type="text" placeholder="https://www.example.edu/research/irb">
+                </label>
+                <label class="span-2">
+                  Raw IRB Policy Text (optional)
+                  <textarea id="importRawTextInput" rows="4" placeholder="Paste policy snippets here if website lookup is unavailable."></textarea>
+                </label>
+              </div>
+              <div class="actions importer-actions">
+                <button id="importProfileBtn" type="button">Import Profile Draft</button>
+                <button id="applyImportedProfileBtn" type="button" class="secondary" disabled>Use Imported Profile</button>
+              </div>
+              <p id="importStatus" class="status">No imported profile yet.</p>
+              <div id="importResultCard" class="card muted compact-card">
+                <p>Importer output will appear here (confidence, warnings, sources, and detected requirements).</p>
+              </div>
+            </fieldset>
 
             <fieldset>
               <legend>What data collection methods are planned?</legend>
@@ -239,6 +282,23 @@
             <p class="helper">
               Generate draft language for consent, recruitment, and data handling. Use rewrite actions to reduce coercive tone or improve clarity.
             </p>
+
+            <div class="draft-card readiness-card">
+              <div class="draft-card__head">
+                <h3>Submission Readiness (Profile-Based)</h3>
+                <div class="actions">
+                  <button id="runReadinessBtn" type="button">Run Readiness Check</button>
+                </div>
+              </div>
+              <p class="status" id="readinessStatus">No readiness check yet.</p>
+              <div id="readinessSummaryCard" class="card muted compact-card">
+                <p>Run the readiness check after generating drafts to see missing fields, placeholders, and required attachments for your selected IRB profile.</p>
+              </div>
+              <div id="readinessDetails" class="readiness-details"></div>
+              <div id="sectionChecklistCard" class="card muted compact-card">
+                <p>Section mapping checklist will appear here.</p>
+              </div>
+            </div>
 
             <div class="draft-card" data-doc="consent">
               <div class="draft-card__head">
