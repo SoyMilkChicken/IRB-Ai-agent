@@ -1,42 +1,75 @@
-# IRB Copilot MVP (AI IRB Assistance Tool)
+# AI IRB Copilot (MVP)
 
-Minimal MVP for an IRB assistance tool focused on pre-screening and drafting support for studies like your AI grading research project.
+IRB preparation assistant for research studies involving human participants (especially classroom / AI-grading contexts).
 
-This is **not** an IRB approval tool. It helps users:
+This tool is for:
 
-- run a rule-based IRB risk pre-screen
-- generate draft consent / recruitment / data-handling language
-- rewrite draft text to be less coercive or clearer
-- export a draft bundle for human review
+- rule-based IRB pre-screening
+- draft language generation (`consent`, `recruitment`, `data handling`)
+- AI-assisted rewriting (`less coercive`, `clearer`)
+- draft packet export for advisor/IRB review
 
-## What is included
+It is **not** an IRB approval system.
 
-- `server.py`: dependency-free Python server (static UI + JSON API)
-- `static/index.html`: wizard interface
-- `static/app.js`: UI logic (form capture, flags, drafting, rewrite, export)
-- `static/styles.css`: MVP styling
+## Demo Screens (Placeholders - Replace With Real Screenshots)
 
-## Run locally
+These placeholders are wired into the README so you can quickly swap in real screenshots later.
 
-Requirements: Python 3.10+ (works with standard library only)
+![Hero UI placeholder](docs/images/hero-placeholder.svg)
+![Risk flags placeholder](docs/images/risk-flags-placeholder.svg)
+![Drafting studio placeholder](docs/images/drafting-studio-placeholder.svg)
+
+Recommended real screenshots to replace with:
+
+1. Hero + stepper + progress bar
+2. Risk Flags screen with summary + cards
+3. Drafting Studio with generated consent text
+
+## What It Does
+
+1. `Project Intake`
+- Collects study title, institution, course context, methods, and plain-language purpose
+
+2. `Recruitment & Participants`
+- Captures participant groups, recruiter role, voluntariness, extra credit, minors, grade impact
+
+3. `Data & Privacy`
+- Captures identifiers, education records, de-identification, storage/access/retention
+
+4. `Rule-Based Risk Flags`
+- Flags common IRB concerns (coercion, FERPA risk, grade impact, missing safeguards)
+
+5. `Drafting Studio`
+- Generates drafts for:
+  - `consent`
+  - `recruitment`
+  - `data handling`
+- Rewrites text to be:
+  - `Less Coercive`
+  - `Clearer`
+- Exports a draft bundle (`.txt`) after a human-review acknowledgment
+
+## Stack (Current MVP)
+
+- `Python stdlib` backend (`server.py`)
+- `HTML/CSS/JS` frontend (`static/`)
+- Optional `OpenAI API` integration for drafting/rewriting
+- Local browser `localStorage` persistence (no DB yet)
+
+## Quick Start (Local)
+
+Requirements: `Python 3.10+`
 
 ```bash
+cd /Users/stanfeng/Documents/IRB-Agent
 python3 server.py
 ```
 
-Open [http://127.0.0.1:8000](http://127.0.0.1:8000)
+Open:
 
-## AI modes
+- [http://127.0.0.1:8000](http://127.0.0.1:8000)
 
-The app supports two modes:
-
-1. `Template fallback` (default)
-- No API key required
-- Generates structured draft templates and rule-based rewrites
-- Useful for demos and workflow testing
-
-2. `OpenAI-backed drafting/rewrite` (optional)
-- Set environment variables before running:
+### Optional: Enable AI Drafting/Rewriting
 
 ```bash
 export OPENAI_API_KEY="your_key_here"
@@ -44,51 +77,76 @@ export OPENAI_MODEL="gpt-4.1-mini"   # optional
 python3 server.py
 ```
 
-Optional advanced override:
+Without an API key, the app runs in `template fallback` mode (still fully usable for demos/workflow testing).
 
-- `OPENAI_CHAT_API_URL` (defaults to `https://api.openai.com/v1/chat/completions`)
+## Demo Script (For Professor / IRB Office Conversation)
 
-## MVP workflow (implemented)
+Use this flow during a live demo:
 
-1. `Project Intake`
-- Study details + collection methods
+1. Open the app and show `template fallback` vs `AI API connected` status in the top banner.
+2. Fill in a realistic AI-grading study scenario with student participants and course context.
+3. Set recruiter role to `instructor` and enable `extra credit` without alternative to trigger high-severity flags.
+4. Run `IRB Risk Flags` and explain the deterministic (rule-based) concerns surfaced.
+5. Move to `Drafting Studio` and generate all drafts.
+6. Use `Less Coercive` on the recruitment draft and show how wording is revised.
+7. Check the human-review acknowledgment box and export the draft bundle.
+8. Emphasize that the tool prepares materials but does not approve IRB submissions.
 
-2. `Recruitment & Participants`
-- Power dynamics, extra credit, grade impact, minors
+## Repository Structure
 
-3. `Data & Privacy`
-- Identifiers, education records, de-identification, storage/access/retention
+- `/Users/stanfeng/Documents/IRB-Agent/server.py` - local API server + rule engine + optional AI calls
+- `/Users/stanfeng/Documents/IRB-Agent/static/index.html` - UI structure
+- `/Users/stanfeng/Documents/IRB-Agent/static/styles.css` - glass UI + motion
+- `/Users/stanfeng/Documents/IRB-Agent/static/app.js` - wizard logic, API calls, draft workflow
+- `/Users/stanfeng/Documents/IRB-Agent/static/config.js` - frontend API base URL config (for split deployment)
+- `/Users/stanfeng/Documents/IRB-Agent/render.yaml` - Render backend blueprint
+- `/Users/stanfeng/Documents/IRB-Agent/.github/workflows/deploy-pages.yml` - GitHub Pages frontend deploy
+- `/Users/stanfeng/Documents/IRB-Agent/DEPLOYMENT.md` - step-by-step hosting guide
 
-4. `IRB Risk Flags`
-- Rule-based pre-screen flags (FERPA risk, coercion, grade impact, etc.)
+## Deployment Options
 
-5. `Drafting Studio`
-- Generate `consent`, `recruitment`, `data handling`
-- Rewrite draft text: `Less Coercive`, `Clearer`
-- Export draft bundle (`.txt`) after human review acknowledgement
+### Option A: One Service (Simplest)
 
-## Current limitations (expected for MVP)
+Deploy the whole app (`frontend + backend`) on a single Python host (Render/Railway/Fly/VM).
 
-- No authentication / multi-user accounts
-- No database persistence (uses browser localStorage only)
-- No institution-specific IRB form mapping yet
-- No direct upload/parse of IRB PDF forms
-- No auto-submission to IRB portals
+Pros:
 
-## Recommended next build steps
+- easiest setup
+- no CORS configuration needed
+- one URL for users
 
-1. Add institution-specific form mapping (field-by-field)
-2. Add project persistence (Postgres / Supabase)
-3. Add document upload + section comparison
-4. Add advisor review workflow and version tracking
-5. Add role-based access and secure storage controls
+### Option B: GitHub Pages (Frontend) + Render (Backend)
 
-## Deployment (simple path)
+This repo now supports a split deployment:
 
-- Frontend + backend together on a small VM/container (Python)
-- Or split later into:
-  - Frontend: Next.js (Vercel)
-  - Backend: FastAPI/Node (Render/Railway/Fly)
-  - DB: Postgres (Supabase/Neon)
+- `GitHub Pages` serves `static/` as the frontend
+- `Render` hosts the Python API (`/api/*`)
 
-If you want, the next step can be a `production-oriented architecture` version (Next.js + API + DB schema) while preserving this MVP workflow and rules.
+Important:
+
+- Set `CORS_ALLOW_ORIGINS` on the backend (e.g., `https://soymilkchicken.github.io`)
+- Set the frontend API base URL in `/Users/stanfeng/Documents/IRB-Agent/static/config.js` (or via the `PAGES_API_BASE_URL` GitHub secret for the Pages workflow)
+
+See `/Users/stanfeng/Documents/IRB-Agent/DEPLOYMENT.md` for exact steps.
+
+## Validity / Safety Notes
+
+- Outputs are valid as `drafts`, not guaranteed IRB-ready submissions.
+- Institution-specific forms and policies still need manual review.
+- Final review by PI/faculty advisor + IRB office is required.
+
+## Current MVP Limits
+
+- No authentication / multi-user support
+- No database persistence (local browser only)
+- No institution-specific IRB form mapping
+- No upload/parse of IRB PDFs yet
+- No direct IRB portal submission
+
+## Suggested Next Steps
+
+1. Add readiness checks (required fields + placeholder detection before export)
+2. Add institution-specific IRB form mapping (field-by-field)
+3. Add project persistence (Postgres/Supabase)
+4. Add diff view and version history for rewrites
+5. Add advisor review workflow + comments

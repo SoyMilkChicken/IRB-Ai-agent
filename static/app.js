@@ -17,6 +17,44 @@ const summaryCard = document.getElementById("summaryCard");
 const flagList = document.getElementById("flagList");
 const progressFill = document.getElementById("progressFill");
 const progressLabel = document.getElementById("progressLabel");
+const apiBaseUrl = resolveApiBaseUrl();
+
+function normalizeApiBaseUrl(value) {
+  return String(value || "").trim().replace(/\/+$/, "");
+}
+
+function resolveApiBaseUrl() {
+  let fromQuery = "";
+  try {
+    const params = new URLSearchParams(window.location.search);
+    fromQuery = params.get("apiBaseUrl") || "";
+  } catch {
+    fromQuery = "";
+  }
+
+  const fromConfig = window.IRB_COPILOT_CONFIG?.apiBaseUrl || "";
+  const fromStorage = (() => {
+    try {
+      return localStorage.getItem("irb-copilot-api-base-url") || "";
+    } catch {
+      return "";
+    }
+  })();
+
+  const resolved = normalizeApiBaseUrl(fromQuery || fromConfig || fromStorage);
+  if (fromQuery && resolved) {
+    try {
+      localStorage.setItem("irb-copilot-api-base-url", resolved);
+    } catch {
+      // Ignore storage errors.
+    }
+  }
+  return resolved;
+}
+
+function apiUrl(path) {
+  return apiBaseUrl ? `${apiBaseUrl}${path}` : path;
+}
 
 function getStepTitle(step) {
   const btn = stepButtons.find((node) => Number(node.dataset.step) === step);
@@ -91,7 +129,7 @@ function getFormData() {
 }
 
 async function apiPost(path, body) {
-  const res = await fetch(path, {
+  const res = await fetch(apiUrl(path), {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
@@ -173,15 +211,17 @@ function escapeHtml(text) {
 
 async function checkHealth() {
   try {
-    const res = await fetch("/api/health");
+    const res = await fetch(apiUrl("/api/health"));
     const data = await res.json();
     state.aiMode = data.aiMode || "unknown";
     const modeLabel = state.aiMode === "openai" ? "AI API connected" : "Template fallback mode";
-    healthBanner.textContent = `${modeLabel}. ${data.note || ""}`;
+    const backendLabel = apiBaseUrl ? `Backend: ${apiBaseUrl}. ` : "Backend: same origin. ";
+    healthBanner.textContent = `${modeLabel}. ${backendLabel}${data.note || ""}`;
     healthBanner.dataset.mode = state.aiMode;
     restartAnimation(healthBanner, "surface-pop");
   } catch (err) {
-    healthBanner.textContent = `Unable to reach backend: ${err.message}`;
+    const backendLabel = apiBaseUrl ? ` (${apiBaseUrl})` : "";
+    healthBanner.textContent = `Unable to reach backend${backendLabel}: ${err.message}`;
     healthBanner.dataset.mode = "error";
     restartAnimation(healthBanner, "surface-pop");
   }

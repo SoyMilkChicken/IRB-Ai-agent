@@ -28,6 +28,22 @@ ROOT = Path(__file__).resolve().parent
 STATIC_DIR = ROOT / "static"
 
 
+def _cors_allowed_origins() -> set[str]:
+    raw = _str(os.environ.get("CORS_ALLOW_ORIGINS"))
+    if not raw:
+        return set()
+    return {item.strip() for item in raw.split(",") if item.strip()}
+
+
+def _origin_allowed(origin: str | None) -> bool:
+    if not origin:
+        return True
+    allowed = _cors_allowed_origins()
+    if not allowed:
+        return False
+    return "*" in allowed or origin in allowed
+
+
 def _bool(value: Any) -> bool:
     if isinstance(value, bool):
         return value
@@ -676,6 +692,57 @@ class IRBCopilotHandler(SimpleHTTPRequestHandler):
         # Keep logs concise but visible during local development.
         print(f"[{self.log_date_time_string()}] {self.address_string()} - {fmt % args}")
 
+    def _is_api_request(self) -> bool:
+        return self.path.startswith("/api/")
+
+    def _apply_cors_headers(self) -> None:
+        if not self._is_api_request():
+            return
+        origin = self.headers.get("Origin")
+        if not origin:
+            return
+        if not _origin_allowed(origin):
+            return
+        allowed = _cors_allowed_origins()
+        if "*" in allowed:
+            self.send_header("Access-Control-Allow-Origin", "*")
+        else:
+            self.send_header("Access-Control-Allow-Origin", origin)
+            self.send_header("Vary", "Origin")
+        self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+        self.send_header("Access-Control-Allow-Headers", "Content-Type")
+
+    def end_headers(self) -> None:
+        self._apply_cors_headers()
+        super().end_headers()
+
+    def _origin_matches_this_server(self, origin: str | None) -> bool:
+        if not origin:
+            return False
+        host = _str(self.headers.get("Host"))
+        if not host:
+            return False
+        candidates = {f"http://{host}", f"https://{host}"}
+        forwarded_proto = _str(self.headers.get("X-Forwarded-Proto"))
+        if forwarded_proto:
+            for proto in forwarded_proto.split(","):
+                proto = proto.strip()
+                if proto:
+                    candidates.add(f"{proto}://{host}")
+        return origin in candidates
+
+    def _reject_disallowed_cross_origin(self) -> bool:
+        if not self._is_api_request():
+            return False
+        origin = self.headers.get("Origin")
+        if origin and not (_origin_allowed(origin) or self._origin_matches_this_server(origin)):
+            self._send_error_json(
+                "CORS origin not allowed. Set CORS_ALLOW_ORIGINS on the backend.",
+                status=403,
+            )
+            return True
+        return False
+
     def _read_json(self) -> dict[str, Any]:
         content_length = int(self.headers.get("Content-Length", "0"))
         raw = self.rfile.read(content_length) if content_length > 0 else b"{}"
@@ -698,7 +765,19 @@ class IRBCopilotHandler(SimpleHTTPRequestHandler):
     def _send_error_json(self, message: str, status: int = 400) -> None:
         self._send_json({"error": message}, status=status)
 
+    def do_OPTIONS(self) -> None:  # noqa: N802
+        if not self._is_api_request():
+            self.send_error(HTTPStatus.NOT_FOUND, "Not Found")
+            return
+        if self._reject_disallowed_cross_origin():
+            return
+        self.send_response(HTTPStatus.NO_CONTENT)
+        self.send_header("Content-Length", "0")
+        self.end_headers()
+
     def do_GET(self) -> None:  # noqa: N802
+        if self._is_api_request() and self._reject_disallowed_cross_origin():
+            return
         if self.path == "/api/health":
             self._send_json(
                 {
@@ -715,6 +794,8 @@ class IRBCopilotHandler(SimpleHTTPRequestHandler):
         return super().do_GET()
 
     def do_POST(self) -> None:  # noqa: N802
+        if self._reject_disallowed_cross_origin():
+            return
         try:
             payload = self._read_json()
         except ValueError as exc:
@@ -776,8 +857,11 @@ def run_server(host: str = "127.0.0.1", port: int = 8000) -> None:
 if __name__ == "__main__":
     import argparse
 
+    default_port = int(os.environ.get("PORT", "8000"))
+    default_host = os.environ.get("HOST", "127.0.0.1")
+
     parser = argparse.ArgumentParser(description="Run the IRB Copilot MVP server")
-    parser.add_argument("--host", default="127.0.0.1")
-    parser.add_argument("--port", type=int, default=8000)
+    parser.add_argument("--host", default=default_host)
+    parser.add_argument("--port", type=int, default=default_port)
     args = parser.parse_args()
     run_server(args.host, args.port)
