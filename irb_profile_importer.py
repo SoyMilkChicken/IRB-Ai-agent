@@ -18,8 +18,10 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from html.parser import HTMLParser
 from io import BytesIO
+import ipaddress
 import json
 import re
+import socket
 from typing import Any
 from urllib.parse import parse_qs, quote_plus, unquote, urljoin, urlparse
 from urllib import error as urlerror
@@ -32,6 +34,19 @@ MAX_SOURCE_FETCH = 7
 MAX_LINKS_PER_PAGE = 120
 MAX_PDF_SOURCES_TO_PARSE = 2
 MAX_TEXT_CHARS = 240_000
+MAX_SOURCE_RESPONSE_BYTES = 2_500_000
+MAX_REDIRECTS = 4
+ALLOWED_FETCH_SCHEMES = {"http", "https"}
+ALLOWED_FETCH_PORTS = {80, 443}
+BLOCKED_HOSTNAMES = {
+    "localhost",
+    "localhost.localdomain",
+    "0.0.0.0",
+    "127.0.0.1",
+    "::1",
+    "metadata.google.internal",
+}
+REDIRECT_HTTP_CODES = {301, 302, 303, 307, 308}
 
 
 IRB_PAGE_HINTS = [
@@ -217,25 +232,152 @@ def _normalize_url(url: str) -> str:
     url = _str(url)
     if not url:
         return ""
-    if url.startswith(("http://", "https://")):
+    parsed = urlparse(url)
+    if parsed.scheme:
         return url
+    if url.startswith("//"):
+        return f"https:{url}"
     return f"https://{url}"
 
 
-def _request_url(url: str) -> tuple[int | None, str, bytes, str | None]:
-    req = urlrequest.Request(url, headers={"User-Agent": USER_AGENT})
+def _is_blocked_ip(ip: Any) -> bool:
+    return (
+        ip.is_private
+        or ip.is_loopback
+        or ip.is_link_local
+        or ip.is_multicast
+        or ip.is_reserved
+        or ip.is_unspecified
+    )
+
+
+def _host_resolves_to_blocked_ip(host: str) -> tuple[bool, str]:
+    # First catch direct IP literals.
     try:
-        with urlrequest.urlopen(req, timeout=REQUEST_TIMEOUT_SECONDS) as resp:
-            status = getattr(resp, "status", None)
-            content_type = _str(resp.headers.get("Content-Type"))
-            payload = resp.read()
-            return status, content_type, payload, None
-    except urlerror.HTTPError as exc:
-        return exc.code, _str(exc.headers.get("Content-Type") if exc.headers else ""), b"", f"HTTP {exc.code}"
-    except urlerror.URLError as exc:
-        return None, "", b"", f"Network error: {exc.reason}"
-    except Exception as exc:  # noqa: BLE001
-        return None, "", b"", str(exc)
+        direct_ip = ipaddress.ip_address(host)
+        if _is_blocked_ip(direct_ip):
+            return True, str(direct_ip)
+        return False, ""
+    except ValueError:
+        pass
+
+    try:
+        infos = socket.getaddrinfo(host, None, proto=socket.IPPROTO_TCP)
+    except socket.gaierror:
+        # Leave DNS failures to the normal fetch path.
+        return False, ""
+
+    for info in infos:
+        resolved = _str(info[4][0]).split("%", 1)[0]
+        try:
+            ip = ipaddress.ip_address(resolved)
+        except ValueError:
+            continue
+        if _is_blocked_ip(ip):
+            return True, resolved
+    return False, ""
+
+
+def _validate_fetch_url(url: str) -> tuple[bool, str]:
+    parsed = urlparse(url)
+    scheme = _str(parsed.scheme).lower()
+    if scheme not in ALLOWED_FETCH_SCHEMES:
+        return False, "Only http/https URLs are allowed."
+
+    if parsed.username or parsed.password:
+        return False, "URLs containing embedded credentials are blocked."
+
+    host = (_str(parsed.hostname).lower().rstrip("."))
+    if not host:
+        return False, "URL host is missing."
+    if host in BLOCKED_HOSTNAMES:
+        return False, f"Blocked host '{host}'."
+
+    try:
+        port = parsed.port
+    except ValueError:
+        return False, "Invalid URL port."
+    if port and port not in ALLOWED_FETCH_PORTS:
+        return False, f"Blocked non-standard port '{port}'."
+
+    blocked, ip_text = _host_resolves_to_blocked_ip(host)
+    if blocked:
+        return False, f"Resolved to private/local IP '{ip_text}'."
+
+    return True, ""
+
+
+def _read_response_payload(resp: Any) -> bytes:
+    content_length = _str(resp.headers.get("Content-Length"))
+    if content_length:
+        try:
+            declared = int(content_length)
+        except ValueError:
+            declared = 0
+        if declared > MAX_SOURCE_RESPONSE_BYTES:
+            raise ValueError(
+                f"Response too large ({declared} bytes). Max is {MAX_SOURCE_RESPONSE_BYTES} bytes."
+            )
+
+    payload = resp.read(MAX_SOURCE_RESPONSE_BYTES + 1)
+    if len(payload) > MAX_SOURCE_RESPONSE_BYTES:
+        raise ValueError(
+            f"Response exceeded max size ({MAX_SOURCE_RESPONSE_BYTES} bytes)."
+        )
+    return payload
+
+
+class _NoRedirectHandler(urlrequest.HTTPRedirectHandler):
+    def redirect_request(
+        self,
+        req: urlrequest.Request,
+        fp: Any,
+        code: int,
+        msg: str,
+        headers: Any,
+        newurl: str,
+    ) -> None:
+        return None
+
+
+_NO_REDIRECT_OPENER = urlrequest.build_opener(_NoRedirectHandler)
+
+
+def _request_url(url: str) -> tuple[int | None, str, bytes, str | None]:
+    target = _normalize_url(url)
+    if not target:
+        return None, "", b"", "Empty URL."
+
+    redirects = 0
+    while redirects <= MAX_REDIRECTS:
+        valid, reason = _validate_fetch_url(target)
+        if not valid:
+            return None, "", b"", f"Blocked URL for security reasons: {reason}"
+
+        req = urlrequest.Request(target, headers={"User-Agent": USER_AGENT})
+        try:
+            with _NO_REDIRECT_OPENER.open(req, timeout=REQUEST_TIMEOUT_SECONDS) as resp:
+                status = getattr(resp, "status", None)
+                content_type = _str(resp.headers.get("Content-Type"))
+                payload = _read_response_payload(resp)
+                return status, content_type, payload, None
+        except urlerror.HTTPError as exc:
+            status = exc.code
+            content_type = _str(exc.headers.get("Content-Type") if exc.headers else "")
+            if status in REDIRECT_HTTP_CODES:
+                location = _str(exc.headers.get("Location") if exc.headers else "")
+                if not location:
+                    return status, content_type, b"", f"Redirect (HTTP {status}) without Location header."
+                target = _normalize_url(urljoin(target, location))
+                redirects += 1
+                continue
+            return status, content_type, b"", f"HTTP {status}"
+        except urlerror.URLError as exc:
+            return None, "", b"", f"Network error: {exc.reason}"
+        except Exception as exc:  # noqa: BLE001
+            return None, "", b"", str(exc)
+
+    return None, "", b"", f"Too many redirects (>{MAX_REDIRECTS})."
 
 
 def _decode_text(content_type: str, payload: bytes) -> str:

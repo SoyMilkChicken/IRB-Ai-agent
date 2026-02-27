@@ -11,10 +11,13 @@ No third-party dependencies required.
 
 from __future__ import annotations
 
+from collections import deque
 import json
 import os
 import re
 import textwrap
+import threading
+import time
 from dataclasses import dataclass
 from http import HTTPStatus
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
@@ -36,6 +39,59 @@ from irb_profiles import (
 
 ROOT = Path(__file__).resolve().parent
 STATIC_DIR = ROOT / "static"
+
+
+def _env_int(name: str, default: int, min_value: int = 1, max_value: int = 50_000_000) -> int:
+    raw = os.environ.get(name)
+    if raw is None:
+        return default
+    try:
+        value = int(raw)
+    except ValueError:
+        return default
+    return max(min_value, min(max_value, value))
+
+
+MAX_JSON_BODY_BYTES = _env_int("MAX_JSON_BODY_BYTES", 1_048_576, min_value=1_024, max_value=50_000_000)
+RATE_LIMIT_WINDOW_SECONDS = _env_int("RATE_LIMIT_WINDOW_SECONDS", 60, min_value=1, max_value=3_600)
+RATE_LIMIT_MAX_REQUESTS = _env_int("RATE_LIMIT_MAX_REQUESTS", 120, min_value=1, max_value=10_000)
+
+
+def _backend_api_key() -> str:
+    return (os.environ.get("BACKEND_API_KEY") or "").strip()
+
+
+def _auth_enabled() -> bool:
+    return bool(_backend_api_key())
+
+
+class PayloadTooLargeError(ValueError):
+    """Raised when request payload exceeds configured limits."""
+
+
+class BasicRateLimiter:
+    """Simple in-memory sliding-window rate limiter."""
+
+    def __init__(self, max_requests: int, window_seconds: int) -> None:
+        self.max_requests = max_requests
+        self.window_seconds = window_seconds
+        self._events: dict[str, deque[float]] = {}
+        self._lock = threading.Lock()
+
+    def check(self, key: str) -> tuple[bool, int]:
+        now = time.monotonic()
+        with self._lock:
+            bucket = self._events.setdefault(key, deque())
+            while bucket and (now - bucket[0]) > self.window_seconds:
+                bucket.popleft()
+            if len(bucket) >= self.max_requests:
+                retry_after = max(1, int(self.window_seconds - (now - bucket[0])))
+                return False, retry_after
+            bucket.append(now)
+            return True, 0
+
+
+RATE_LIMITER = BasicRateLimiter(RATE_LIMIT_MAX_REQUESTS, RATE_LIMIT_WINDOW_SECONDS)
 
 
 def _cors_allowed_origins() -> set[str]:
@@ -985,7 +1041,10 @@ class IRBCopilotHandler(SimpleHTTPRequestHandler):
         print(f"[{self.log_date_time_string()}] {self.address_string()} - {fmt % args}")
 
     def _is_api_request(self) -> bool:
-        return self.path.startswith("/api/")
+        return self._request_path().startswith("/api/")
+
+    def _request_path(self) -> str:
+        return self.path.split("?", 1)[0]
 
     def _apply_cors_headers(self) -> None:
         if not self._is_api_request():
@@ -1002,7 +1061,7 @@ class IRBCopilotHandler(SimpleHTTPRequestHandler):
             self.send_header("Access-Control-Allow-Origin", origin)
             self.send_header("Vary", "Origin")
         self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
-        self.send_header("Access-Control-Allow-Headers", "Content-Type")
+        self.send_header("Access-Control-Allow-Headers", "Content-Type, X-API-Key, Authorization")
 
     def end_headers(self) -> None:
         self._apply_cors_headers()
@@ -1036,7 +1095,17 @@ class IRBCopilotHandler(SimpleHTTPRequestHandler):
         return False
 
     def _read_json(self) -> dict[str, Any]:
-        content_length = int(self.headers.get("Content-Length", "0"))
+        raw_length = self.headers.get("Content-Length", "0")
+        try:
+            content_length = int(raw_length)
+        except ValueError as exc:
+            raise ValueError("Invalid Content-Length header.") from exc
+        if content_length < 0:
+            raise ValueError("Invalid Content-Length header.")
+        if content_length > MAX_JSON_BODY_BYTES:
+            raise PayloadTooLargeError(
+                f"JSON payload too large. Max allowed is {MAX_JSON_BODY_BYTES} bytes."
+            )
         raw = self.rfile.read(content_length) if content_length > 0 else b"{}"
         if not raw:
             return {}
@@ -1045,17 +1114,87 @@ class IRBCopilotHandler(SimpleHTTPRequestHandler):
         except json.JSONDecodeError as exc:
             raise ValueError(f"Invalid JSON body: {exc.msg}") from exc
 
-    def _send_json(self, payload: dict[str, Any], status: int = 200) -> None:
+    def _send_json(
+        self,
+        payload: dict[str, Any],
+        status: int = 200,
+        extra_headers: dict[str, str] | None = None,
+    ) -> None:
         body = json.dumps(payload).encode("utf-8")
         self.send_response(status)
         self.send_header("Content-Type", "application/json; charset=utf-8")
         self.send_header("Content-Length", str(len(body)))
         self.send_header("Cache-Control", "no-store")
+        if extra_headers:
+            for key, value in extra_headers.items():
+                self.send_header(key, value)
         self.end_headers()
         self.wfile.write(body)
 
-    def _send_error_json(self, message: str, status: int = 400) -> None:
-        self._send_json({"error": message}, status=status)
+    def _send_error_json(
+        self,
+        message: str,
+        status: int = 400,
+        extra_headers: dict[str, str] | None = None,
+    ) -> None:
+        self._send_json({"error": message}, status=status, extra_headers=extra_headers)
+
+    def _extract_presented_api_key(self) -> str:
+        header_key = _str(self.headers.get("X-API-Key"))
+        if header_key:
+            return header_key
+        auth_header = _str(self.headers.get("Authorization"))
+        if auth_header.lower().startswith("bearer "):
+            return auth_header[7:].strip()
+        return ""
+
+    def _is_auth_exempt_path(self) -> bool:
+        return self._request_path() == "/api/health"
+
+    def _reject_unauthorized(self) -> bool:
+        if not self._is_api_request():
+            return False
+        if self._is_auth_exempt_path():
+            return False
+        configured_key = _backend_api_key()
+        if not configured_key:
+            return False
+        presented = self._extract_presented_api_key()
+        if presented == configured_key:
+            return False
+        self._send_error_json(
+            "Unauthorized. Provide X-API-Key or Authorization: Bearer <key>.",
+            status=401,
+            extra_headers={"WWW-Authenticate": "Bearer"},
+        )
+        return True
+
+    def _rate_limit_key(self) -> str:
+        forwarded = _str(self.headers.get("X-Forwarded-For"))
+        if forwarded:
+            client_ip = forwarded.split(",", 1)[0].strip()
+        else:
+            client_ip = _str(self.client_address[0] if self.client_address else "unknown")
+        # Keep key size bounded.
+        return client_ip[:128] or "unknown"
+
+    def _is_rate_limit_exempt_path(self) -> bool:
+        return self._request_path() == "/api/health"
+
+    def _reject_rate_limited(self) -> bool:
+        if not self._is_api_request():
+            return False
+        if self._is_rate_limit_exempt_path():
+            return False
+        ok, retry_after = RATE_LIMITER.check(self._rate_limit_key())
+        if ok:
+            return False
+        self._send_error_json(
+            "Rate limit exceeded. Please retry later.",
+            status=429,
+            extra_headers={"Retry-After": str(retry_after)},
+        )
+        return True
 
     def do_OPTIONS(self) -> None:  # noqa: N802
         if not self._is_api_request():
@@ -1068,20 +1207,26 @@ class IRBCopilotHandler(SimpleHTTPRequestHandler):
         self.end_headers()
 
     def do_GET(self) -> None:  # noqa: N802
+        request_path = self._request_path()
         if self._is_api_request() and self._reject_disallowed_cross_origin():
             return
-        if self.path == "/api/health":
+        if self._reject_rate_limited():
+            return
+        if self._reject_unauthorized():
+            return
+        if request_path == "/api/health":
             self._send_json(
                 {
                     "ok": True,
                     "service": "IRB Copilot MVP",
                     "aiConfigured": _openai_available(),
                     "aiMode": "openai" if _openai_available() else "template_fallback",
+                    "authRequired": _auth_enabled(),
                     "note": "This tool assists with drafting and pre-screening only; it does not approve IRB submissions.",
                 }
             )
             return
-        if self.path == "/api/profiles":
+        if request_path == "/api/profiles":
             active_id = _str(self.headers.get("X-IRB-Profile-Id")) or DEFAULT_IRB_PROFILE_ID
             active = get_irb_profile(active_id)
             self._send_json(
@@ -1093,21 +1238,29 @@ class IRBCopilotHandler(SimpleHTTPRequestHandler):
                 }
             )
             return
-        if self.path in {"/", "/index.html"}:
+        if request_path in {"/", "/index.html"}:
             self.path = "/index.html"
         return super().do_GET()
 
     def do_POST(self) -> None:  # noqa: N802
+        request_path = self._request_path()
         if self._reject_disallowed_cross_origin():
+            return
+        if self._reject_rate_limited():
+            return
+        if self._reject_unauthorized():
             return
         try:
             payload = self._read_json()
+        except PayloadTooLargeError as exc:
+            self._send_error_json(str(exc), status=413)
+            return
         except ValueError as exc:
             self._send_error_json(str(exc), status=400)
             return
 
         try:
-            if self.path == "/api/evaluate":
+            if request_path == "/api/evaluate":
                 intake = payload.get("intake", {})
                 if not isinstance(intake, dict):
                     raise ValueError("'intake' must be an object")
@@ -1122,7 +1275,7 @@ class IRBCopilotHandler(SimpleHTTPRequestHandler):
                 )
                 return
 
-            if self.path == "/api/readiness":
+            if request_path == "/api/readiness":
                 intake = payload.get("intake", {})
                 evaluation = payload.get("evaluation", {})
                 drafts = payload.get("drafts", {})
@@ -1142,7 +1295,7 @@ class IRBCopilotHandler(SimpleHTTPRequestHandler):
                 self._send_json({"ok": True, "readiness": readiness})
                 return
 
-            if self.path == "/api/import-profile":
+            if request_path == "/api/import-profile":
                 organization_name = _str(payload.get("organizationName"))
                 organization_website = _str(payload.get("organizationWebsite"))
                 irb_page_url = _str(payload.get("irbPageUrl"))
@@ -1182,7 +1335,7 @@ class IRBCopilotHandler(SimpleHTTPRequestHandler):
                 )
                 return
 
-            if self.path == "/api/draft":
+            if request_path == "/api/draft":
                 intake = payload.get("intake", {})
                 evaluation = payload.get("evaluation", {})
                 doc_type = _str(payload.get("docType"))
@@ -1196,7 +1349,7 @@ class IRBCopilotHandler(SimpleHTTPRequestHandler):
                 self._send_json({"ok": True, "draft": result})
                 return
 
-            if self.path == "/api/rewrite":
+            if request_path == "/api/rewrite":
                 text = _str(payload.get("text"))
                 goal = _str(payload.get("goal"))
                 intake = payload.get("intake", {})

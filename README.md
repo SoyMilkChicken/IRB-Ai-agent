@@ -86,6 +86,18 @@ python3 server.py
 
 Without an API key, the app runs in `template fallback` mode (still fully usable for demos/workflow testing).
 
+### Optional: Backend Security Controls
+
+```bash
+export BACKEND_API_KEY="replace-with-shared-secret"   # enables API auth for /api/*
+export MAX_JSON_BODY_BYTES=1048576                    # request body limit (bytes)
+export RATE_LIMIT_WINDOW_SECONDS=60                   # per-IP sliding window
+export RATE_LIMIT_MAX_REQUESTS=120                    # requests per window
+python3 server.py
+```
+
+Frontend callers can pass the key via `X-API-Key`. For split frontend/backend deploys, set `backendApiKey` in `/Users/stanfeng/Documents/IRB-Agent/static/config.js` only for private demos.
+
 ## Demo Script (For Professor / IRB Office Conversation)
 
 Use this flow during a live demo:
@@ -147,10 +159,11 @@ See `/Users/stanfeng/Documents/IRB-Agent/DEPLOYMENT.md` for exact steps.
 - Outputs are valid as `drafts`, not guaranteed IRB-ready submissions.
 - Institution-specific forms and policies still need manual review.
 - Final review by PI/faculty advisor + IRB office is required.
+- Importer network fetches block localhost/private-network URLs and non-standard ports to reduce SSRF risk.
 
 ## Current MVP Limits
 
-- No authentication / multi-user support
+- No user accounts / multi-user identity model (optional shared API key only)
 - No database persistence (local browser only)
 - No institution-specific IRB form mapping
 - No upload/parse of IRB PDFs yet

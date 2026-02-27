@@ -51,6 +51,10 @@ python3 server.py --host 0.0.0.0 --port $PORT
 - `CORS_ALLOW_ORIGINS=https://soymilkchicken.github.io`
 - `OPENAI_API_KEY=...` (optional)
 - `OPENAI_MODEL=gpt-4.1-mini` (optional)
+- `BACKEND_API_KEY=...` (optional, enables API auth)
+- `MAX_JSON_BODY_BYTES=1048576` (optional request limit)
+- `RATE_LIMIT_WINDOW_SECONDS=60` (optional rate-limit window)
+- `RATE_LIMIT_MAX_REQUESTS=120` (optional rate-limit max)
 
 4. Deploy and copy your backend URL, for example:
 
@@ -85,6 +89,7 @@ If you do not want to use a GitHub secret, edit `/Users/stanfeng/Documents/IRB-A
 ```js
 window.IRB_COPILOT_CONFIG = {
   apiBaseUrl: "https://your-backend-url",
+  backendApiKey: "",
 };
 ```
 
@@ -92,13 +97,13 @@ Commit + push, then GitHub Pages will use that backend.
 
 ### D. Quick Testing Without Editing `config.js`
 
-The frontend also supports an `apiBaseUrl` query parameter:
+The frontend also supports URL query parameters:
 
 ```text
-https://soymilkchicken.github.io/IRB-Ai-agent/?apiBaseUrl=https://your-backend-url
+https://soymilkchicken.github.io/IRB-Ai-agent/?apiBaseUrl=https://your-backend-url&backendApiKey=your-shared-key
 ```
 
-The app stores that value in browser localStorage for future visits.
+The app stores those values in browser localStorage for future visits.
 
 ## CORS Notes
 

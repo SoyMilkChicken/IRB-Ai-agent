@@ -36,6 +36,7 @@ const importStatus = document.getElementById("importStatus");
 const importResultCard = document.getElementById("importResultCard");
 const applyImportedProfileBtn = document.getElementById("applyImportedProfileBtn");
 const apiBaseUrl = resolveApiBaseUrl();
+const backendApiKey = resolveBackendApiKey();
 
 function normalizeApiBaseUrl(value) {
   return String(value || "").trim().replace(/\/+$/, "");
@@ -68,6 +69,46 @@ function resolveApiBaseUrl() {
     }
   }
   return resolved;
+}
+
+function resolveBackendApiKey() {
+  let fromQuery = "";
+  try {
+    const params = new URLSearchParams(window.location.search);
+    fromQuery = params.get("backendApiKey") || params.get("apiKey") || "";
+  } catch {
+    fromQuery = "";
+  }
+
+  const fromConfig = window.IRB_COPILOT_CONFIG?.backendApiKey || "";
+  const fromStorage = (() => {
+    try {
+      return localStorage.getItem("irb-copilot-backend-api-key") || "";
+    } catch {
+      return "";
+    }
+  })();
+
+  const resolved = String(fromQuery || fromConfig || fromStorage || "").trim();
+  if (fromQuery && resolved) {
+    try {
+      localStorage.setItem("irb-copilot-backend-api-key", resolved);
+    } catch {
+      // Ignore storage errors.
+    }
+  }
+  return resolved;
+}
+
+function buildApiHeaders(includeJsonContentType = false) {
+  const headers = {};
+  if (includeJsonContentType) {
+    headers["Content-Type"] = "application/json";
+  }
+  if (backendApiKey) {
+    headers["X-API-Key"] = backendApiKey;
+  }
+  return headers;
 }
 
 function apiUrl(path) {
@@ -211,7 +252,9 @@ function appendOrUpdateProfile(profile) {
 }
 
 async function apiGet(path) {
-  const res = await fetch(apiUrl(path));
+  const res = await fetch(apiUrl(path), {
+    headers: buildApiHeaders(false),
+  });
   const data = await res.json().catch(() => ({}));
   if (!res.ok) {
     throw new Error(data.error || `Request failed (${res.status})`);
@@ -295,7 +338,7 @@ function getFormData() {
 async function apiPost(path, body) {
   const res = await fetch(apiUrl(path), {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: buildApiHeaders(true),
     body: JSON.stringify(body),
   });
   const data = await res.json().catch(() => ({}));
@@ -701,13 +744,18 @@ function escapeHtml(text) {
 
 async function checkHealth() {
   try {
-    const res = await fetch(apiUrl("/api/health"));
+    const res = await fetch(apiUrl("/api/health"), {
+      headers: buildApiHeaders(false),
+    });
     const data = await res.json();
     state.aiMode = data.aiMode || "unknown";
     const modeLabel = state.aiMode === "openai" ? "AI API connected" : "Template fallback mode";
     const backendLabel = apiBaseUrl ? `Backend: ${apiBaseUrl}. ` : "Backend: same origin. ";
-    healthBanner.textContent = `${modeLabel}. ${backendLabel}${data.note || ""}`;
-    healthBanner.dataset.mode = state.aiMode;
+    const authWarning = data.authRequired && !backendApiKey
+      ? " Backend requires an API key; set backendApiKey in config.js or URL query param."
+      : "";
+    healthBanner.textContent = `${modeLabel}. ${backendLabel}${data.note || ""}${authWarning}`;
+    healthBanner.dataset.mode = authWarning ? "warning" : state.aiMode;
     restartAnimation(healthBanner, "surface-pop");
   } catch (err) {
     const backendLabel = apiBaseUrl ? ` (${apiBaseUrl})` : "";
