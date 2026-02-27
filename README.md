@@ -11,19 +11,11 @@ This tool is for:
 
 It is **not** an IRB approval system.
 
-## Demo Screens (Placeholders - Replace With Real Screenshots)
+## Demo Screens
 
-These placeholders are wired into the README so you can quickly swap in real screenshots later.
-
-![Hero UI placeholder](docs/images/hero-placeholder.svg)
-![Risk flags placeholder](docs/images/risk-flags-placeholder.svg)
-![Drafting studio placeholder](docs/images/drafting-studio-placeholder.svg)
-
-Recommended real screenshots to replace with:
-
-1. Hero + stepper + progress bar
-2. Risk Flags screen with summary + cards
-3. Drafting Studio with generated consent text
+![Hero UI](docs/images/hero-ui.png)
+![Risk flags](docs/images/risk-flags.png)
+![Drafting studio](docs/images/drafting-studio.png)
 
 ## What It Does
 
